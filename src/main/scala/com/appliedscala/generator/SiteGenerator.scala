@@ -37,13 +37,50 @@ object SiteGenerator {
 
   val OptionVersion = "version"
   val InitOption = "init"
+  val BuildOption = "generate"
   val HelpOption = "help"
+
+  implicit val actorSystem = ActorSystem.create("actor-world")
+  val conf = ConfigFactory.parseFile(new File(DefaultConfFile))
+  val baseDir = conf.getString("directories.basedir")
+  val contentDir = conf.getString("directories.content")
+  val relativeSiteDir = conf.getString("directories.output")
+  val relativeTemplatesDirName = conf.getString("directories.templates")
+  val postTemplateName = conf.getString("templates.post")
+  val archiveTemplateName = conf.getString("templates.archive")
+  val sitemapTemplateName = conf.getString("templates.sitemap")
+  val indexTemplateName = conf.getString("templates.index")
+  val customTemplateNames = conf.getStringList("templates.custom").toList
+  val siteTitle = conf.getString("site.title")
+  val siteDescription = conf.getString("site.description")
+  val siteHost = conf.getString("site.host")
+  val lastmod = conf.getString("site.lastmod")
+
+  val siteDir = Paths.get(baseDir, relativeSiteDir).toString
+  val templatesDirName = Paths.get(baseDir, relativeTemplatesDirName).toString
+  val archiveOutput = Paths.get(siteDir, conf.getString("directories.archive"))
+  val sitemapOutputDir = Paths.get(siteDir)
+  val indexOutputDir = Paths.get(siteDir)
+  val contentDirFile = Paths.get(baseDir, contentDir).toFile
+
+  val pgPluginsCode = Extensions.TABLES | Extensions.FENCED_CODE_BLOCKS
+  val mdGenerator = new PegDownProcessor(pgPluginsCode)
+  val linkRenderer = createLinkRenderer(siteHost)
+  val cfg = createFreemarkerConfig(templatesDirName)
+  val postTemplate = cfg.getTemplate(postTemplateName)
+  val archiveTemplate = cfg.getTemplate(archiveTemplateName)
+  val sitemapTemplate = cfg.getTemplate(sitemapTemplateName)
+  val indexTemplate = cfg.getTemplate(indexTemplateName)
+  val customTemplates = customTemplateNames.map { name => CustomTemplateGeneration(name.replaceAll("\\.ftl$", ""), cfg.getTemplate(name)) }
+  val mdContentFiles = recursiveListFiles(contentDirFile).filterNot(_.isDirectory)
+
 
   def main(args: Array[String]) = {
 
     val options = new Options
     options.addOption(OptionVersion, false, "print the version information")
     options.addOption(InitOption, false, "initialize project structure and exit")
+    options.addOption(BuildOption, false, "generate site and exit")
     options.addOption(HelpOption, false, "print this message")
     val helpFormatter = new HelpFormatter
     val parser = new DefaultParser
@@ -57,6 +94,9 @@ object SiteGenerator {
     } else if (cmd.hasOption(InitOption)) {
       initProjectStructure()
       System.exit(0)
+    } else if (cmd.hasOption(BuildOption)) {
+      generateSite()
+      System.exit(0)
     } else if (cmd.hasOption(HelpOption)) {
       helpFormatter.printHelp("s2gen", options)
       System.exit(0)
@@ -67,40 +107,7 @@ object SiteGenerator {
       System.exit(-1)
     }
 
-    implicit val actorSystem = ActorSystem.create("actor-world")
-
-    val conf = ConfigFactory.parseFile(new File(DefaultConfFile))
-    val baseDir = conf.getString("directories.basedir")
-    val contentDir = conf.getString("directories.content")
-    val relativeSiteDir = conf.getString("directories.output")
-    val relativeTemplatesDirName = conf.getString("directories.templates")
-    val postTemplateName = conf.getString("templates.post")
-    val archiveTemplateName = conf.getString("templates.archive")
-    val sitemapTemplateName = conf.getString("templates.sitemap")
-    val indexTemplateName = conf.getString("templates.index")
-    val customTemplateNames = conf.getStringList("templates.custom").toList
-    val siteTitle = conf.getString("site.title")
-    val siteDescription = conf.getString("site.description")
-    val siteHost = conf.getString("site.host")
-    val lastmod = conf.getString("site.lastmod")
-
-    val siteDir = Paths.get(baseDir, relativeSiteDir).toString
-    val templatesDirName = Paths.get(baseDir, relativeTemplatesDirName).toString
-    val archiveOutput = Paths.get(siteDir, conf.getString("directories.archive"))
-    val sitemapOutputDir = Paths.get(siteDir)
-    val indexOutputDir = Paths.get(siteDir)
-    val contentDirFile = Paths.get(baseDir, contentDir).toFile
-
-    val pgPluginsCode = Extensions.TABLES | Extensions.FENCED_CODE_BLOCKS
-    val mdGenerator = new PegDownProcessor(pgPluginsCode)
-    val linkRenderer = createLinkRenderer(siteHost)
-    val cfg = createFreemarkerConfig(templatesDirName)
-    val postTemplate = cfg.getTemplate(postTemplateName)
-    val archiveTemplate = cfg.getTemplate(archiveTemplateName)
-    val sitemapTemplate = cfg.getTemplate(sitemapTemplateName)
-    val indexTemplate = cfg.getTemplate(indexTemplateName)
-    val customTemplates = customTemplateNames.map { name => CustomTemplateGeneration(name.replaceAll("\\.ftl$", ""), cfg.getTemplate(name)) }
-    val mdContentFiles = recursiveListFiles(contentDirFile).filterNot(_.isDirectory)
+    
 
     def regenerate(): Unit = {
       logger.info("Cleaning previous version of the site")
@@ -156,6 +163,25 @@ object SiteGenerator {
         monitor.stop()
       }
     })
+  }
+
+  private def generateSite(): Unit = {
+  if (!Files.exists(Paths.get(DefaultConfFile))) {
+          System.err.println(s"Cannot find a configuration file $DefaultConfFile")
+          System.exit(-1)
+        } else {
+          logger.info("Cleaning previous version of the site")
+          FileUtils.deleteDirectory(archiveOutput.toFile)
+          Files.deleteIfExists(Paths.get(sitemapOutputDir.toString, SiteMapFilename))
+          Files.deleteIfExists(Paths.get(indexOutputDir.toString, IndexFilename))
+
+          val siteCommonData = Map("title" -> siteTitle, "description" -> siteDescription)
+          logger.info("Generation started")
+          val postData = mdContentFiles.map { mdFile =>
+            processMdFile(mdFile, mdGenerator, linkRenderer)
+          logger.info("Generation ended")
+          }          
+        }
   }
 
   private def initProjectStructure(): Unit = {
